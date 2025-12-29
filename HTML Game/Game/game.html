@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lane Runner Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        
+        #game-container {
+            position: relative;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #333;
+            background-image: url('images/background.png');
+            background-size: cover;
+            background-position: center;
+            position: relative;
+            z-index: 1;
+            display: block;
+        }
+        
+        #game-stats {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 4;
+            pointer-events: auto;
+        }
+
+        #game-over, #game-win {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+            z-index: 5;
+            pointer-events: auto;
+        }
+        
+            /* Fireworks canvas overlay for collectable1 (coin) */
+            /* Snow canvas sits above game but below fireworks */
+            #snowCanvas {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
+                background: transparent;
+                z-index: 2;
+            }
+
+            #fxCanvas {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
+                background: transparent;
+                z-index: 3;
+            }
+
+        /* Win / Lost image styling */
+        #game-over img, #game-win img {
+            max-width: 320px;
+            width: 80%;
+            height: auto;
+            display: block;
+            margin: 0 auto 10px;
+        }
+        
+        button {
+            margin-top: 10px;
+            padding: 8px 16px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <canvas id="snowCanvas" aria-hidden="true"></canvas>
+        <canvas id="fxCanvas" aria-hidden="true"></canvas>
+        <div id="game-stats">Coins: 0 | Lives: 3</div>
+        <div id="game-over">
+            <img id="lost-img" src="images/lost.png" alt="Game Over">
+            <br>
+            <button id="restart-button">Play Again</button>
+        </div>
+        <div id="game-win">
+            <img id="win-img" src="images/win.png" alt="You Win">
+            <br>
+            <button id="play-again-button">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+        // Game variables
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameStats = document.getElementById('game-stats');
+        const gameOverScreen = document.getElementById('game-over');
+        const gameWinScreen = document.getElementById('game-win');
+        const restartButton = document.getElementById('restart-button');
+        const playAgainButton = document.getElementById('play-again-button');
+        const fxCanvas = document.getElementById('fxCanvas');
+        const fxCtx = fxCanvas.getContext && fxCanvas.getContext('2d');
+        const snowCanvas = document.getElementById('snowCanvas');
+        const snowCtx = snowCanvas.getContext && snowCanvas.getContext('2d');
+        
+        // Load game images
+        const obstacleImage = new Image();
+        obstacleImage.src = 'images/obstacle.png';
+        
+        const coinImage = new Image();
+        coinImage.src = 'images/collectable1.png';
+        
+        const gemImage = new Image();
+        gemImage.src = 'images/collectable2.png';
+        
+        // Present (ultra rare collectable)
+        const presentImage = new Image();
+        presentImage.src = 'images/collectable3.png';
+        // Pickup sound (played when collecting coins/gems/presents)
+        const pickupSound = new Audio();
+        pickupSound.preload = 'auto';
+        // Try mp3 first (better browser support)
+        pickupSound.src = 'sfx/pickup.mp3';
+        pickupSound.load();
+
+        function playPickupSound() {
+            try {
+                // Create a short-lived audio element so overlapping pickups can play
+                const s = new Audio(pickupSound.src);
+                s.volume = 0.9;
+                s.play().catch(() => {});
+            } catch (e) {
+                // ignore errors in environments without audio
+            }
+        }
+
+        // Bomb sound (played when hitting an obstacle)
+        const bombSound = new Audio();
+        bombSound.src = 'sfx/error.mp3';
+
+        function playBombSound() {
+            try {
+                const s = new Audio(bombSound.src);
+                s.volume = 0.95;
+                s.play().catch(() => {});
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // Error sound (played on bomb collection and when losing the game)
+        const errorSound = new Audio();
+        errorSound.src = 'sfx/error.mp3';
+
+        function playErrorSound() {
+            try {
+                const s = new Audio(errorSound.src);
+                s.volume = 1.0;
+                s.play().catch(() => {});
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // Win sound (played when player wins)
+        const winSound = new Audio();
+        winSound.src = 'sfx/win.mp3';
+
+        function playWinSound() {
+            try {
+                const s = new Audio(winSound.src);
+                s.volume = 0.95;
+                s.play().catch(() => {});
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // Background music (loops until player wins or loses)
+        const bgMusic = new Audio();
+        bgMusic.src = 'sfx/background.mp3';
+        bgMusic.loop = true;
+        bgMusic.volume = 0.45;
+        bgMusic.preload = 'auto';
+
+        function playBackgroundMusic() {
+            if (!bgMusic) return;
+            bgMusic.play().catch(() => {
+                // Autoplay may be blocked; unlock on first user gesture
+                const unlock = () => {
+                    bgMusic.play().catch(() => {});
+                    document.removeEventListener('click', unlock);
+                    document.removeEventListener('keydown', unlock);
+                };
+                document.addEventListener('click', unlock, { once: true });
+                document.addEventListener('keydown', unlock, { once: true });
+            });
+        }
+
+        function stopBackgroundMusic() {
+            try {
+                bgMusic.pause();
+                bgMusic.currentTime = 0;
+            } catch (e) {
+                // ignore
+            }
+        }
+        
+        // Player image (tries local project file first)
+        const playerImage = new Image();
+        playerImage.src = 'images/player.png';
+        playerImage.onerror = null;
+        
+        // Game settings
+        const laneCount = 5;
+        const laneWidth = canvas.width / laneCount;
+        const playerSize = 90; // doubled from 30 to make the player icon larger
+        const objectSize = 20;
+        const playerY = canvas.height - playerSize - 10;
+        let playerLane = Math.floor(laneCount / 2);
+        let coins = 0;
+        let lives = 3;
+        let gameRunning = true;
+        // For time-based movement
+        let lastTimestamp = null;
+        
+        // Arrays to store game objects
+        let fallingObjects = [];
+        
+        // Object types
+        const OBJECT_TYPES = {
+            COIN: { value: 1, color: 'yellow', shape: 'circle' },
+            GEM: { value: 10, color: 'purple', shape: 'diamond' },
+            PRESENT: { value: 0, color: 'pink', shape: 'present' },
+            OBSTACLE: { value: 0, color: 'red', shape: 'x' }
+        };
+
+        // Light bulbs on trees
+        let lights = [];
+
+        function initLights() {
+            lights = [];
+            // Place bulbs roughly above lanes (adjustable). Uses several bulb types/colors.
+            const bulbTypes = [
+                { kind: 'round', color: '255,255,230' }, // warm white
+                { kind: 'round', color: '255,240,200' },
+                { kind: 'teardrop', color: '255,210,140' },
+                { kind: 'star', color: '255,255,255' }
+            ];
+
+            // center bulbs removed — bulbs will appear along left/right sides only
+
+            // bulbs along left and right sides (where trees are)
+            const sideCount = 6; // number of bulbs per side
+            const sideMargin = Math.max(24, Math.min(80, canvas.width * 0.06));
+            for (let s = 0; s < sideCount; s++) {
+                const y = 80 + s * ((canvas.height - 160) / (sideCount - 1)) + (Math.random() - 0.5) * 18;
+                // left side
+                const tL = bulbTypes[Math.floor(Math.random() * bulbTypes.length)];
+                lights.push({ x: sideMargin + (Math.random() - 0.5) * 12, y: y + (Math.random() - 0.5) * 8, type: tL.kind, color: tL.color, size: 5 + Math.random() * 4, phase: Math.random() * Math.PI * 2 });
+                // right side
+                const tR = bulbTypes[Math.floor(Math.random() * bulbTypes.length)];
+                lights.push({ x: canvas.width - sideMargin + (Math.random() - 0.5) * 12, y: y + (Math.random() - 0.5) * 8, type: tR.kind, color: tR.color, size: 5 + Math.random() * 4, phase: Math.random() * Math.PI * 2 });
+            }
+        }
+
+        function drawLights(ctx) {
+            if (!ctx) return;
+            const t = Date.now() * 0.004;
+            for (const L of lights) {
+                const pulse = 0.6 + 0.4 * Math.sin(t + L.phase);
+                const radius = L.size * pulse;
+
+                // Glow
+                const grad = ctx.createRadialGradient(L.x, L.y, 0, L.x, L.y, radius * 4);
+                grad.addColorStop(0, `rgba(${L.color},${0.95 * pulse})`);
+                grad.addColorStop(0.4, `rgba(${L.color},${0.45 * pulse})`);
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(L.x, L.y, radius * 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Bulb core
+                ctx.beginPath();
+                if (L.type === 'round') {
+                    ctx.fillStyle = `rgba(${L.color},${1.0})`;
+                    ctx.arc(L.x, L.y, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (L.type === 'teardrop') {
+                    ctx.fillStyle = `rgba(${L.color},${1.0})`;
+                    ctx.beginPath();
+                    ctx.ellipse(L.x, L.y, radius, radius * 1.4, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (L.type === 'star') {
+                    ctx.fillStyle = `rgba(${L.color},${1.0})`;
+                    const spikes = 5;
+                    const outer = radius; const inner = radius * 0.5;
+                    ctx.beginPath();
+                    for (let s = 0; s < spikes; s++) {
+                        const ang = s * Math.PI * 2 / spikes - Math.PI / 2;
+                        ctx.lineTo(L.x + Math.cos(ang) * outer, L.y + Math.sin(ang) * outer);
+                        const ang2 = ang + Math.PI / spikes;
+                        ctx.lineTo(L.x + Math.cos(ang2) * inner, L.y + Math.sin(ang2) * inner);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+        }
+        
+        // Initialize the game
+        function init() {
+            coins = 0;
+            lives = 3;
+            fallingObjects = [];
+            playerLane = Math.floor(laneCount / 2);
+            gameRunning = true;
+            gameOverScreen.style.display = 'none';
+            gameWinScreen.style.display = 'none';
+            updateStats();
+            initLights();
+            // Start or resume background music
+            playBackgroundMusic();
+        }
+
+        // Fireworks particle system
+        let fireworks = [];
+
+        function resizeFxCanvas() {
+            if (!fxCanvas) return;
+            fxCanvas.width = canvas.width;
+            fxCanvas.height = canvas.height;
+        }
+
+        function resizeSnowCanvas() {
+            if (!snowCanvas) return;
+            snowCanvas.width = canvas.width;
+            snowCanvas.height = canvas.height;
+        }
+
+        function resizeLights() {
+            // lights rely on canvas size for placement only when initialized;
+            // re-init to reposition bulbs if needed on resize
+            initLights();
+        }
+
+        function triggerFirework(x, y) {
+            if (!fxCtx) return;
+            const particleCount = 30 + Math.floor(Math.random() * 20);
+            const hue = Math.floor(Math.random() * 360);
+            const baseScale = canvas.height / 600;
+            for (let i = 0; i < particleCount; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 1.5 + Math.random() * 3.5; // px/frame at 60fps reference
+                const speedPPS = speed * 60 * baseScale; // pixels per second
+                const lifeFrames = 60 + Math.random() * 40;
+                const lifeSec = lifeFrames / 60;
+                const gravityPPS2 = 0.06 * 60 * 60 * baseScale; // convert per-frame gravity to px/s^2
+                fireworks.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speedPPS,
+                    vy: Math.sin(angle) * speedPPS,
+                    ay: gravityPPS2,
+                    life: lifeSec,
+                    lifeTotal: lifeSec,
+                    size: 2 + Math.random() * 3,
+                    hue: (hue + (Math.random() * 60 - 30)),
+                    shape: 'circle'
+                });
+            }
+        }
+
+        // Trigger small star-shaped particles (used for collectable1 and collectable2)
+        function triggerStars(x, y, count = 14, baseSize = 2, colorHue = null) {
+            if (!fxCtx) return;
+            const hue = (colorHue !== null) ? colorHue : Math.floor(Math.random() * 360);
+            const baseScale = canvas.height / 600;
+            for (let i = 0; i < count; i++) {
+                const angle = (Math.random() * Math.PI * 2);
+                const speed = 0.8 + Math.random() * 2.2; // px/frame
+                const speedPPS = speed * 60 * baseScale;
+                const lifeFrames = 30 + Math.random() * 30;
+                const lifeSec = lifeFrames / 60;
+                const vyBias = -0.6 * 60 * baseScale; // upward bias in px/s
+                fireworks.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speedPPS,
+                    vy: Math.sin(angle) * speedPPS + vyBias,
+                    ay: 0.06 * 60 * 60 * baseScale,
+                    life: lifeSec,
+                    lifeTotal: lifeSec,
+                    size: baseSize + Math.random() * baseSize,
+                    hue: hue + (Math.random() * 30 - 15),
+                    shape: 'star'
+                });
+            }
+        }
+
+        // Trigger a special present burst (larger stars + sparkles)
+        function triggerPresentBurst(x, y) {
+            if (!fxCtx) return;
+            const hue = 52; // golden
+            // big central burst
+            const baseScale = canvas.height / 600;
+            for (let i = 0; i < 24; i++) {
+                const angle = (i / 24) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+                const speed = 2 + Math.random() * 4; // px/frame
+                const speedPPS = speed * 60 * baseScale;
+                const lifeFrames = 50 + Math.random() * 40;
+                const lifeSec = lifeFrames / 60;
+                fireworks.push({ x: x, y: y, vx: Math.cos(angle) * speedPPS, vy: Math.sin(angle) * speedPPS - (0.6 * 60 * baseScale), ay: 0.06 * 60 * 60 * baseScale, life: lifeSec, lifeTotal: lifeSec, size: 3 + Math.random() * 4, hue: hue + (Math.random() * 20 - 10), shape: 'star', kind: 'present' });
+            }
+            // extra small sparkles
+            for (let i = 0; i < 40; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 0.6 + Math.random() * 2.2;
+                const speedPPS = speed * 60 * baseScale;
+                const lifeFrames = 20 + Math.random() * 30;
+                const lifeSec = lifeFrames / 60;
+                fireworks.push({ x: x + (Math.random() - 0.5) * 8, y: y + (Math.random() - 0.5) * 8, vx: Math.cos(angle) * speedPPS, vy: Math.sin(angle) * speedPPS, ay: 0.06 * 60 * 60 * baseScale, life: lifeSec, lifeTotal: lifeSec, size: 1 + Math.random() * 2, hue: hue + (Math.random() * 30 - 15), shape: 'star', kind: 'present' });
+            }
+        }
+
+        function updateAndDrawFireworks(dt) {
+            if (!fxCtx) return;
+            if (!dt) dt = 1 / 60;
+            // clear fx canvas with slight transparency for trails
+            fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+            for (let i = fireworks.length - 1; i >= 0; i--) {
+                const p = fireworks[i];
+                // apply acceleration (ay) to vy
+                if (p.ay) p.vy += p.ay * dt;
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.life -= dt;
+                const alpha = Math.max(0, (p.lifeTotal ? (p.life / p.lifeTotal) : (p.life / 1.0)));
+                fxCtx.save();
+                fxCtx.globalAlpha = alpha;
+                fxCtx.fillStyle = `hsla(${p.hue}, 100%, 60%, ${alpha})`;
+                if (p.shape === 'star') {
+                    // draw a small star
+                    const spikes = (p.kind === 'present') ? 6 : 5;
+                    const outer = p.size * (p.kind === 'present' ? 2.4 : 2.0);
+                    const inner = outer * 0.45;
+                    fxCtx.beginPath();
+                    for (let s = 0; s < spikes; s++) {
+                        const ang = s * Math.PI * 2 / spikes - Math.PI / 2;
+                        fxCtx.lineTo(p.x + Math.cos(ang) * outer, p.y + Math.sin(ang) * outer);
+                        const ang2 = ang + Math.PI / spikes;
+                        fxCtx.lineTo(p.x + Math.cos(ang2) * inner, p.y + Math.sin(ang2) * inner);
+                    }
+                    fxCtx.closePath();
+                    fxCtx.fill();
+                } else {
+                    fxCtx.beginPath();
+                    fxCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    fxCtx.fill();
+                }
+                fxCtx.restore();
+                if (p.life <= 0) fireworks.splice(i, 1);
+            }
+        }
+
+        // Snow particle system (multiple snowflake types)
+        let snowflakes = [];
+        const SNOW_COUNT = 120;
+
+        function rand(min, max) { return min + Math.random() * (max - min); }
+
+        function createSnowflake() {
+            const types = ['round','cross','star','hex']; // 4+ types
+            const type = types[Math.floor(Math.random() * types.length)];
+            const baseScale = canvas.height / 600;
+            return {
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                vx: rand(-0.3, 0.6) * 60 * baseScale, // convert to px/sec
+                vy: rand(0.3, 1.2) * 60 * baseScale,  // convert to px/sec
+                size: rand(1.5, 5.5),
+                rot: rand(0, Math.PI*2),
+                rotSpeed: rand(-0.02, 0.02) * 60, // rad/sec
+                alpha: rand(0.6, 1),
+                type: type
+            };
+        }
+
+        function initSnow() {
+            snowflakes = [];
+            for (let i = 0; i < SNOW_COUNT; i++) snowflakes.push(createSnowflake());
+        }
+
+        function drawSnowflake(ctx, f) {
+            ctx.save();
+            ctx.globalAlpha = f.alpha;
+            ctx.translate(f.x, f.y);
+            ctx.rotate(f.rot);
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+            if (f.type === 'round') {
+                ctx.beginPath(); ctx.arc(0, 0, f.size, 0, Math.PI*2); ctx.fill();
+            } else if (f.type === 'cross') {
+                ctx.lineWidth = Math.max(1, f.size/3);
+                ctx.beginPath(); ctx.moveTo(-f.size, 0); ctx.lineTo(f.size, 0); ctx.moveTo(0, -f.size); ctx.lineTo(0, f.size); ctx.stroke();
+            } else if (f.type === 'star') {
+                const r = f.size; const R = r*0.4;
+                ctx.beginPath();
+                for (let i=0;i<5;i++){
+                    ctx.lineTo(Math.cos((i*2*Math.PI)/5)*r, Math.sin((i*2*Math.PI)/5)*r);
+                    ctx.lineTo(Math.cos(((i*2+1)*Math.PI)/5)*R, Math.sin(((i*2+1)*Math.PI)/5)*R);
+                }
+                ctx.closePath(); ctx.fill();
+            } else if (f.type === 'hex') {
+                const r = f.size;
+                ctx.beginPath();
+                for (let i=0;i<6;i++){
+                    ctx.lineTo(Math.cos(i*Math.PI/3)*r, Math.sin(i*Math.PI/3)*r);
+                }
+                ctx.closePath(); ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        function updateAndDrawSnow() {
+            if (!snowCtx) return;
+            // require dt; default to 1/60
+            const dt = (typeof arguments[0] === 'number') ? arguments[0] : (1/60);
+            snowCtx.clearRect(0, 0, snowCanvas.width, snowCanvas.height);
+            // gentle wind oscillation (affects velocity over time)
+            const time = Date.now() * 0.001;
+            const wind = Math.sin(time * 0.5) * 0.2;
+            for (let i = 0; i < snowflakes.length; i++) {
+                const f = snowflakes[i];
+                // wind is in px/frame-like units; convert to px/sec effect
+                const baseScale = canvas.height / 600;
+                const windAccel = wind * 0.002 * 60 * baseScale; // px/sec^2
+                f.vx += windAccel * dt;
+                f.x += f.vx * dt;
+                f.y += f.vy * dt;
+                f.rot += f.rotSpeed * dt;
+                // wrap or reset
+                if (f.y - 10 > snowCanvas.height) {
+                    snowflakes[i] = createSnowflake();
+                    snowflakes[i].y = -10;
+                }
+                if (f.x < -20) f.x = snowCanvas.width + 20;
+                if (f.x > snowCanvas.width + 20) f.x = -20;
+                drawSnowflake(snowCtx, f);
+            }
+        }
+        
+        // Move player left or right
+        function movePlayer(direction) {
+            if (!gameRunning) return;
+            
+            if (direction === 'left' && playerLane > 0) {
+                playerLane--;
+            } else if (direction === 'right' && playerLane < laneCount - 1) {
+                playerLane++;
+            }
+        }
+        
+        // Add a new falling object
+        function addFallingObject() {
+            if (!gameRunning) return;
+            
+            const lane = Math.floor(Math.random() * laneCount);
+            
+            // Use weighted probabilities to make gems rare
+            const rand = Math.random();
+            let type;
+            
+            // 2% present (ultra rare), 15% gem (rare), 45% coin, 35% obstacle
+            if (rand < 0.02) {
+                // 2% chance for present (ultra rare)
+                type = OBJECT_TYPES.PRESENT;
+            } else if (rand < 0.20) {
+                // next 15% for gems
+                type = OBJECT_TYPES.GEM;
+            } else if (rand < 0.65) {
+                // 45% chance for coins
+                type = OBJECT_TYPES.COIN;
+            } else {
+                // remaining chance for obstacles
+                type = OBJECT_TYPES.OBSTACLE;
+            }
+
+            // Speeds are defined relative to the original canvas (600px height).
+            // Convert to pixels-per-second and scale with current canvas height so
+            // fall speed stays consistent across different resolutions.
+            const baseScale = canvas.height / 600;
+            const baseFrameSpeed = (type === OBJECT_TYPES.PRESENT) ? 6 : (2 + Math.random() * 2); // px/frame at 60fps reference
+            const speedPPS = baseFrameSpeed * 60 * baseScale; // pixels per second
+
+            fallingObjects.push({
+                lane: lane,
+                y: -objectSize,
+                type: type,
+                speed: speedPPS
+            });
+        }
+        
+        // Update all game objects
+        function update(dt) {
+            if (!gameRunning) return;
+
+            // Update falling objects (movement uses pixels-per-second * dt)
+            for (let i = fallingObjects.length - 1; i >= 0; i--) {
+                const obj = fallingObjects[i];
+                obj.y += obj.speed * dt;
+
+                // Check if object is out of bounds
+                if (obj.y > canvas.height) {
+                    fallingObjects.splice(i, 1);
+                    continue;
+                }
+                
+                // Check collision with player
+                const playerX = playerLane * laneWidth + laneWidth / 2;
+                const objX = obj.lane * laneWidth + laneWidth / 2;
+                
+                const distance = Math.sqrt(
+                    Math.pow(playerX - objX, 2) + 
+                    Math.pow(playerY - obj.y, 2)
+                );
+                
+                if (distance < (playerSize + objectSize) / 2) {
+                    // Collision detected
+                    if (obj.type === OBJECT_TYPES.OBSTACLE) {
+                        // play bomb sound on hit
+                        playBombSound();
+                        // play error sound for bomb collection
+                        playErrorSound();
+                        lives--;
+                        updateStats();
+                        if (lives <= 0) {
+                            gameOver();
+                        }
+                    } else if (obj.type === OBJECT_TYPES.PRESENT) {
+                        // Present grants an extra life instead of points
+                        lives++;
+                        updateStats();
+                        const objX = obj.lane * laneWidth + laneWidth / 2;
+                        const objY = obj.y;
+                        resizeFxCanvas();
+                        // celebratory fireworks for life pickup
+                            // Use fireworks effect for present pickup (larger celebratory bursts)
+                            triggerFirework(objX, objY - 8);
+                            setTimeout(() => triggerFirework(objX - 12, objY), 80);
+                            setTimeout(() => triggerFirework(objX + 12, objY), 160);
+                        // play pickup sound
+                        playPickupSound();
+                    } else {
+                        // Normal coin/gem behavior
+                        coins += obj.type.value;
+                        // play pickup sound for coins/gems
+                        playPickupSound();
+                            // Trigger star visual effect for coins and gems
+                            if (obj.type === OBJECT_TYPES.GEM || obj.type === OBJECT_TYPES.COIN) {
+                                const objX = obj.lane * laneWidth + laneWidth / 2;
+                                const objY = obj.y;
+                                resizeFxCanvas();
+                                // gems slightly larger and tinted purple, coins more yellow
+                                const hue = (obj.type === OBJECT_TYPES.GEM) ? 280 : 48;
+                                triggerStars(objX, objY, 16, (obj.type === OBJECT_TYPES.GEM) ? 3 : 2, hue);
+                            }
+                        updateStats();
+                        if (coins >= 100) {
+                            gameWin();
+                        }
+                    }
+                    fallingObjects.splice(i, 1);
+                }
+            }
+            
+            // Randomly add new objects: convert frame-based spawn prob to time-based
+            // At 60fps the old code had ~0.02 chance per frame => ~1.2 spawns/sec.
+            const spawnProbPerSecond = 0.02 * 60;
+            if (Math.random() < spawnProbPerSecond * dt) {
+                addFallingObject();
+            }
+        }
+        
+        // Draw everything on canvas
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Lane separators removed
+            
+            // Draw lights (on top of background / trees, behind player)
+            drawLights(ctx);
+
+            // Draw player (image with blue-box fallback)
+            const playerX = playerLane * laneWidth + (laneWidth - playerSize) / 2;
+            // If the image is loaded and valid, draw it; otherwise draw the blue rectangle
+            if (playerImage.complete && playerImage.naturalWidth !== 0) {
+                ctx.drawImage(playerImage, playerX, playerY, playerSize, playerSize);
+            } else {
+                ctx.fillStyle = 'blue';
+                ctx.fillRect(playerX, playerY, playerSize, playerSize);
+            }
+            
+            // Draw falling objects
+            for (const obj of fallingObjects) {
+                const objX = obj.lane * laneWidth + laneWidth / 2;
+                
+                ctx.fillStyle = obj.type.color;
+                
+                if (obj.type.shape === 'circle') {
+                    // Draw coin image (1 point)
+                    const imgSize = objectSize * 2;
+                    ctx.drawImage(coinImage, objX - imgSize / 2, obj.y - imgSize / 2, imgSize, imgSize);
+                } else if (obj.type.shape === 'diamond') {
+                    // Draw gem image (10 points)
+                    const imgSize = objectSize * 2;
+                    ctx.drawImage(gemImage, objX - imgSize / 2, obj.y - imgSize / 2, imgSize, imgSize);
+                } else if (obj.type.shape === 'present') {
+                    // Draw present image (ultra rare)
+                    const imgSize = objectSize * 2.2;
+                    ctx.drawImage(presentImage, objX - imgSize / 2, obj.y - imgSize / 2, imgSize, imgSize);
+                } else if (obj.type.shape === 'x') {
+                    // Draw obstacle (bomb image)
+                    const imgSize = objectSize * 2; // Make bomb slightly larger
+                    ctx.drawImage(obstacleImage, objX - imgSize / 2, obj.y - imgSize / 2, imgSize, imgSize);
+                }
+            }
+
+            // Draw snow overlay (below fireworks)
+            updateAndDrawSnow();
+
+            // Draw fireworks overlay
+            updateAndDrawFireworks();
+        }
+        
+        // Game loop
+        function gameLoop(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            let dt = (timestamp - lastTimestamp) / 1000;
+            lastTimestamp = timestamp;
+            // clamp dt to avoid huge jumps
+            if (dt > 0.05) dt = 0.05;
+
+            update(dt);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Update statistics display
+        function updateStats() {
+            gameStats.innerText = `Points: ${coins} | Lives: ${lives}`;
+        }
+        
+        // Game over
+        function gameOver() {
+            gameRunning = false;
+            // play error sound when losing the game
+            playErrorSound();
+            // stop background music on game end
+            stopBackgroundMusic();
+            gameOverScreen.style.display = 'block';
+        }
+        
+        // Game win
+        function gameWin() {
+            gameRunning = false;
+            // play win sound on victory
+            playWinSound();
+            // stop background music on game end
+            stopBackgroundMusic();
+            gameWinScreen.style.display = 'block';
+        }
+        
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            // Arrow keys
+            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+                movePlayer('left');
+            } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                movePlayer('right');
+            }
+        });
+        
+        restartButton.addEventListener('click', init);
+        playAgainButton.addEventListener('click', init);
+        
+        // Start the game
+        init();
+        // ensure fx and snow canvases match game canvas
+        resizeFxCanvas();
+        resizeSnowCanvas();
+        initSnow();
+        gameLoop();
+
+        // Keep canvases sized when window resizes
+        window.addEventListener('resize', () => {
+            resizeFxCanvas();
+            resizeSnowCanvas();
+            resizeLights();
+        });
+    </script>
+</body>
+</html>
